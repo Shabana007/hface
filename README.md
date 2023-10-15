@@ -1,4 +1,3 @@
-# hface
 title: OCR Image To Text
 emoji: 📸
 colorFrom: green
