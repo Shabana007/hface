@@ -1,118 +1,69 @@
+import torch 
+import re 
 import gradio as gr
-import tensorflow as tf
-import keras_ocr
-import requests
-import cv2
-import os
-import csv
-import numpy as np
-import pandas as pd
-import huggingface_hub
-from huggingface_hub import Repository
-from datetime import datetime
-import scipy.ndimage.interpolation as inter
-import easyocr
-import datasets
-from datasets import load_dataset, Image
 from PIL import Image
-from paddleocr import PaddleOCR
-from save_data import flag
-            
-"""
-Paddle OCR
-"""
-def ocr_with_paddle(img):
-    finaltext = ''
-    ocr = PaddleOCR(lang='en', use_angle_cls=True)
-    # img_path = 'exp.jpeg'
-    result = ocr.ocr(img)
+
+from transformers import AutoTokenizer, ViTFeatureExtractor, VisionEncoderDecoderModel 
+import os
+import tensorflow as tf
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+device='cpu'
+
+model_id = "nttdataspain/vit-gpt2-stablediffusion2-lora"
+model = VisionEncoderDecoderModel.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+feature_extractor = ViTFeatureExtractor.from_pretrained(model_id)
+
+# Predict function
+def predict(image):
+    img = image.convert('RGB')
+    model.eval()
+    pixel_values = feature_extractor(images=[img], return_tensors="pt").pixel_values
+    with torch.no_grad():
+        output_ids = model.generate(pixel_values, max_length=16, num_beams=4, return_dict_in_generate=True).sequences
+
+    preds = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
+    preds = [pred.strip() for pred in preds]
+    return preds[0]
+
+input = gr.inputs.Image(label="Upload any Image", type = 'pil', optional=True)
+output = gr.outputs.Textbox(type="text",label="Captions")
+examples_folder = os.path.join(os.path.dirname(__file__), "examples")
+examples = [os.path.join(examples_folder, file) for file in os.listdir(examples_folder)]
+
+with gr.Blocks() as demo:
     
-    for i in range(len(result[0])):
-        text = result[0][i][1][0]
-        finaltext += ' '+ text
-    return finaltext
-
-"""
-Keras OCR
-"""
-def ocr_with_keras(img):
-    output_text = ''
-    pipeline=keras_ocr.pipeline.Pipeline()
-    images=[keras_ocr.tools.read(img)]
-    predictions=pipeline.recognize(images)
-    first=predictions[0]
-    for text,box in first:
-        output_text += ' '+ text
-    return output_text
-
-"""
-easy OCR
-"""
-# gray scale image
-def get_grayscale(image):
-    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-# Thresholding or Binarization
-def thresholding(src):
-    return cv2.threshold(src,127,255, cv2.THRESH_TOZERO)[1]
-def ocr_with_easy(img):
-    gray_scale_image=get_grayscale(img)
-    thresholding(gray_scale_image)
-    cv2.imwrite('image.png',gray_scale_image)
-    reader = easyocr.Reader(['th','en'])
-    bounds = reader.readtext('image.png',paragraph="False",detail = 0)
-    bounds = ''.join(bounds)
-    return bounds
-        
-"""
-Generate OCR
-"""
-def generate_ocr(Method,img):
+    gr.HTML(
+        """
+        <div style="text-align: center; max-width: 1200px; margin: 20px auto;">
+        <h2 style="font-weight: 900; font-size: 3rem; margin: 0rem">
+            📸 Image-to-Text with Awais Nayyar 📝
+        </h2>
+        <br>   
+        </div>
+        """)
     
-    text_output = ''
-    if (img).any():
-        add_csv = []
-        image_id = 1
-        print("Method___________________",Method)
-        if Method == 'EasyOCR':
-            text_output = ocr_with_easy(img)
-        if Method == 'KerasOCR':
-            text_output = ocr_with_keras(img)
-        if Method == 'PaddleOCR':
-            text_output = ocr_with_paddle(img)
-       
-        try:
-            flag(Method,text_output,img)
-        except Exception as e:
-            print(e)
-        return text_output
-    else:
-        raise gr.Error("Please upload an image!!!!")
-    
-    # except Exception as e:
-    #     print("Error in ocr generation ==>",e)
-    #     text_output = "Something went wrong"
-    # return text_output
-    
+    with gr.Row():
+            with gr.Column(scale=1):
+                # img = gr.inputs.Image(label="Upload any Image", type = 'pil', optional=True)
+                img = gr.Image(label="Upload any Image", type = 'pil', optional=True)
 
-"""
-Create user interface for OCR demo
-"""
+                # img = gr.inputs.Image(type="pil", label="Upload any Image", optional=True)
 
-image = gr.Image(shape=(300, 300))
-method = gr.Radio(["PaddleOCR","EasyOCR", "KerasOCR"],value="PaddleOCR")
-output = gr.Textbox(label="Output")
+                button = gr.Button(value="Convert")
+            with gr.Column(scale=1):
+                # out = gr.outputs.Textbox(type="text",label="Captions")
+                out = gr.Label(type="text", label="Captions")
 
-demo = gr.Interface(
-    generate_ocr,
-    [method,image],
-    output,
-    title="Optical Character Recognition",
-    css=".gradio-container {background-color: lightgray} #radio_div {background-color: #FFD8B4; font-size: 40px;}",
-    article = """<p style='text-align: center;'>Feel free to give us your thoughts on this demo and please contact us at 
-                    <a href="mailto:letstalk@pragnakalp.com" target="_blank">letstalk@pragnakalp.com</a> 
-                    <p style='text-align: center;'>Developed by: <a href="https://www.pragnakalp.com" target="_blank">Pragnakalp Techlabs</a></p>"""
-    
-
-)
-demo.launch(enable_queue = False)
+                
+    button.click(predict, inputs=[img], outputs=[out])
+ 
+    gr.Examples(
+        examples=examples,
+        inputs=img,
+        outputs=out,
+        fn=predict,
+        cache_examples=True,
+    )
+demo.launch(debug=True)
